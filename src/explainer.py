@@ -230,11 +230,11 @@ def call_llm(
     }
 
     delay = LLM_RETRY_BASE_DELAY_SECONDS
-    last_err: Optional[Exception] = None
+    last_err_msg: str = "unknown"
 
     for attempt in range(1, LLM_MAX_RETRIES + 1):
         try:
-            logger.debug("Calling Gemini (attempt %d/%d)", attempt, LLM_MAX_RETRIES)
+            logger.info("Calling Gemini (attempt %d/%d) model=%s", attempt, LLM_MAX_RETRIES, GEMINI_MODEL)
             response = requests.post(
                 GEMINI_API_URL,
                 json=payload,
@@ -258,10 +258,13 @@ def call_llm(
                     ) from parse_err
 
             if response.status_code in (429, 500, 503):
+                last_err_msg = f"HTTP {response.status_code}: {response.text[:300]}"
                 logger.warning(
-                    "Gemini API returned retryable status %d: %s. Retrying in %.1fs...",
+                    "Gemini retryable status %d on attempt %d/%d: %s. Retrying in %.1fs...",
                     response.status_code,
-                    response.text[:200],
+                    attempt,
+                    LLM_MAX_RETRIES,
+                    response.text[:300],
                     delay,
                 )
                 time.sleep(delay)
@@ -269,15 +272,16 @@ def call_llm(
                 continue
 
             # Non-retryable HTTP error (400, 401, 403, 404)
-            raise LLMRequestError(
-                f"Gemini API error {response.status_code}: {response.text[:500]}"
-            )
+            error_detail = f"Gemini API error {response.status_code}: {response.text[:500]}"
+            logger.error("Non-retryable Gemini error: %s", error_detail)
+            raise LLMRequestError(error_detail)
 
         except requests.RequestException as req_err:
-            last_err = req_err
+            last_err_msg = str(req_err)
             logger.warning(
-                "Gemini request network failure on attempt %d: %s. Retrying in %.1fs...",
+                "Gemini network failure on attempt %d/%d: %s. Retrying in %.1fs...",
                 attempt,
+                LLM_MAX_RETRIES,
                 req_err,
                 delay,
             )
@@ -285,7 +289,7 @@ def call_llm(
             delay *= 2.0
 
     raise LLMRequestError(
-        f"Gemini call failed after {LLM_MAX_RETRIES} attempts. Last error: {last_err}"
+        f"Gemini call failed after {LLM_MAX_RETRIES} attempts. Last error: {last_err_msg}"
     )
 
 
